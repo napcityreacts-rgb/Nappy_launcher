@@ -423,7 +423,14 @@ class NappyThemePickerActivity : Activity() {
             setPadding(dp(20), dp(10), dp(20), dp(10))
             layoutParams = llLp(0, WRAP, 1f)
             contentDescription = "$label tab"
-            setOnClickListener { switchTab(targetTab) }
+            isClickable = true; isFocusable = true
+            setOnClickListener { v ->
+                // Quick dip so every tap visibly registers
+                v.animate().alpha(0.5f).setDuration(60)
+                    .withEndAction { v.animate().alpha(1f).setDuration(100).start() }
+                    .start()
+                switchTab(targetTab)
+            }
         }
 
         val t1 = tab("Themes", Tab.THEMES)
@@ -452,7 +459,12 @@ class NappyThemePickerActivity : Activity() {
         }
 
     private fun switchTab(tab: Tab) {
-        if (activeTab == tab) return
+        if (activeTab == tab) {
+            // Re-tapping the active tab scrolls its list back to the top
+            if (tab == Tab.THEMES) themesScroll?.smoothScrollTo(0, 0)
+            else appsScroll?.smoothScrollTo(0, 0)
+            return
+        }
         activeTab = tab
         themesPanel?.visibility   = if (tab == Tab.THEMES) View.VISIBLE else View.GONE
         appsPanel  ?.visibility   = if (tab == Tab.APPS)   View.VISIBLE else View.GONE
