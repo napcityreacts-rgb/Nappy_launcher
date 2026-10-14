@@ -18,8 +18,8 @@
 
 package com.neoapps.neolauncher.compose.components.preferences
 
-import android.app.Activity
 import android.content.Intent
+import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -611,12 +611,16 @@ fun PagePreference(
                         context,
                         com.napcity.nappy.themes.NappyThemePickerActivity::class.java
                     )
-                    if (context !is Activity) {
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
+                    // ALWAYS set NEW_TASK: LocalContext.current may be a
+                    // ContextWrapper rather than the Activity itself, and the
+                    // old `context !is Activity` check missed that case —
+                    // startActivity then threw and the catch swallowed it,
+                    // so tapping Nappy Themes did nothing at all.
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(intent)
                 } catch (e: Exception) {
                     android.util.Log.e("PagePreference", "Failed to launch NappyThemePickerActivity", e)
+                    Toast.makeText(context, "Nappy Themes failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } else {
                 scope.launch {
