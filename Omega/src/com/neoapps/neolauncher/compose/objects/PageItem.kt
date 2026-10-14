@@ -83,6 +83,12 @@ open class PageItem(
             icon = Phosphor.Info,
             route = NavRoute.About()
         )
+        // Nappy Themes: opens the theme picker Activity (not a Compose page)
+        val PrefsNappyThemes = PageItem(
+            titleId = R.string.title__nappy_themes,
+            icon = Phosphor.Palette,
+            route = NavRoute.NappyThemes()
+        )
         val AboutTranslators = PageItem(
             titleId = R.string.about_translators,
             icon = Phosphor.Translate,
