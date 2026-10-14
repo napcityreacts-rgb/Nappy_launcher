@@ -26,6 +26,14 @@
     Refer comments around specific entries on how to extend individual components.
     -->
 
+    <!-- Nappy: allow queryIntentActivities() to see all launchable apps (Android 11+) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:backupAgent="com.android.launcher3.LauncherBackupAgent"
         android:fullBackupOnly="true"
