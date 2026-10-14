@@ -18,6 +18,8 @@
 
 package com.neoapps.neolauncher.compose.components.preferences
 
+import android.app.Activity
+import android.content.Intent
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -588,6 +590,7 @@ fun PagePreference(
 ) {
     val scope = rememberCoroutineScope()
     val paneNavigator = LocalPaneNavigator.current
+    val context = LocalContext.current
     BasePreference(
         modifier = modifier,
         titleId = titleId,
@@ -597,8 +600,28 @@ fun PagePreference(
         index = index,
         groupSize = groupSize,
         onClick = {
-            scope.launch {
-                paneNavigator.navigateTo(ListDetailPaneScaffoldRole.Detail, route)
+            if (route is NavRoute.NappyThemes) {
+                // Nappy Themes is a standalone Activity, NOT a Compose page.
+                // Launch it directly from the tap — routing through
+                // navigateTo -> detail-pane LaunchedEffect -> navigateBack
+                // raced the backstack and crashed instantly on tap.
+                // Never navigate for this route.
+                try {
+                    val intent = Intent(
+                        context,
+                        com.napcity.nappy.themes.NappyThemePickerActivity::class.java
+                    )
+                    if (context !is Activity) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    android.util.Log.e("PagePreference", "Failed to launch NappyThemePickerActivity", e)
+                }
+            } else {
+                scope.launch {
+                    paneNavigator.navigateTo(ListDetailPaneScaffoldRole.Detail, route)
+                }
             }
         }
     )
