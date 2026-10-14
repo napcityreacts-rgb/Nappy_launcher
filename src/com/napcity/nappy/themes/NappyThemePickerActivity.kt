@@ -20,14 +20,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ResolveInfo
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
 import android.os.Bundle
@@ -40,7 +40,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
@@ -56,76 +58,96 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * Theme Picker — lists all Nappy home-screen themes by name with a color
- * preview swatch and description. Selecting a theme saves it and applies it on
- * next launcher start.
+ * NappyThemePickerActivity
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * BUG FIXES (carried from revision 1):
- *   FIX-1  RadioButton IDs use View.generateViewId() — avoids ordinal-0 /
- *           low-integer ID collisions with system views.
- *   FIX-2  themeRadios / themeCards cleared in onDestroy() — no View leak.
- *   FIX-3  killLauncher() catch shows a Toast confirming the theme was saved.
- *   FIX-4  contentDescription on every interactive element for TalkBack.
- *   FIX-5  ScrollView given a stable generateViewId() ID for scroll-restore.
- *   FIX-6  addView(card, LayoutParams) used so RadioGroup can't override width.
+ * Dual-purpose screen:
+ *   TAB "Themes" — pick and apply a Nappy home-screen theme (all previous features).
+ *   TAB "Apps"   — full scrollable list of every installed launchable app, replacing
+ *                  the separate app drawer. Tap any row to launch that app.
+ *                  Apps load in a background thread; a spinner shows while loading.
+ *                  A-Z sidebar rail jumps to any letter section instantly.
+ *                  Search bar filters both tabs.
  *
- * NEW FEATURES (matched to reference images):
- *   IMG-1  Large italic day-of-week hero label (script feel, Image 1).
- *   IMG-1  Horizontal rolling date strip / calendar row (Image 1).
- *   IMG-1  Battery progress bar with % remaining (Image 1).
- *   IMG-2  Live analog clock drawn on Canvas, updates every second (Image 2).
- *   IMG-2  Pill-shaped shortcut buttons row at bottom (Image 2 SEARCH/CAMERA).
- *   IMG-3  Sine-wave Canvas divider between sections (Image 3).
- *   IMG-4  Large bold digital clock hero at top (Image 4).
- *   IMG-4  Theme-initial fast-scroll sidebar rail on the right (Image 4 A-Z).
- *   IMG-5  Torn / jagged-edge Canvas divider on the active card (Image 5).
- *   IMG-5  Split diagonal swatch: left panel / right panel per card (Image 5/6).
- *   IMG-6  Full-screen gradient colour-wash preview overlay on long-press (Img 6).
- *   IMG-6  Battery circle arc drawn with Canvas (Image 6).
- *   MISC   Live clock updates (Handler every second) — onStart/onStop lifecycle.
- *   MISC   Battery BroadcastReceiver — registered/unregistered in onStart/onStop.
- *   MISC   Live search filter (carried from revision 1).
- *   MISC   Scale-bounce tap animation + active card border (revision 1).
- * ═══════════════════════════════════════════════════════════════════════════
+ * Bug fixes (all revisions preserved):
+ *   FIX-1  View.generateViewId() for RadioButton IDs.
+ *   FIX-2  All View refs cleared in onDestroy().
+ *   FIX-3  Toast on successful save when killLauncher() throws.
+ *   FIX-4  contentDescription on all interactive elements.
+ *   FIX-5  ScrollView stable ID for scroll-position restore.
+ *   FIX-6  Explicit LayoutParams on addView() calls inside RadioGroup.
+ *
+ * Image-matched features (all revisions preserved):
+ *   IMG-1  Bold-italic day-of-week hero, date strip, battery bar.
+ *   IMG-2  Live Canvas analog clock, pill shortcut row.
+ *   IMG-3  Sine-wave Canvas divider.
+ *   IMG-4  Large digital clock, A-Z sidebar rail.
+ *   IMG-5  Torn-edge Canvas divider on active card, split diagonal swatch.
+ *   IMG-6  Battery arc, full-screen gradient overlay on long-press.
  */
 class NappyThemePickerActivity : Activity() {
 
-    // ── State ──────────────────────────────────────────────────────────────────
-    private val themeRadios = mutableListOf<Pair<NappyTheme, RadioButton>>()
-    private val themeCards  = mutableListOf<Pair<NappyTheme, View>>()
-    private var selectedCard: View? = null
-    private var scrollViewId: Int = View.NO_ID
-    private var footerLabel: TextView? = null
-    private var scrollView: ScrollView? = null
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+    private val WRAP  = ViewGroup.LayoutParams.WRAP_CONTENT
+
+    // ── Tab state ─────────────────────────────────────────────────────────────
+    private enum class Tab { THEMES, APPS }
+    private var activeTab = Tab.THEMES
+    private var themesPanel: View? = null
+    private var appsPanel: View? = null
+    private var tabThemes: TextView? = null
+    private var tabApps: TextView? = null
+    private var appsSidebar: LinearLayout? = null
+    private var themesSidebar: LinearLayout? = null
+
+    // ── Theme-picker state ─────────────────────────────────────────────────────
+    private val themeRadios    = mutableListOf<Pair<NappyTheme, RadioButton>>()
+    private val themeCards     = mutableListOf<Pair<NappyTheme, View>>()
+    private var selectedCard   : View? = null
+    private var scrollViewId   : Int   = View.NO_ID
+    private var footerLabel    : TextView? = null
+    private var themesScroll   : ScrollView? = null
     private val themeYPositions = mutableMapOf<NappyTheme, Int>()
+    private var currentTheme   = NappyTheme.NONE
 
-    // IMG-4: digital clock label
-    private var digitalClockView: TextView? = null
+    // ── App-list state ────────────────────────────────────────────────────────
+    /**
+     * Lightweight model holding what we need to display a row without
+     * keeping the full ResolveInfo alive in memory forever.
+     */
+    data class AppEntry(
+        val label: String,
+        val packageName: String,
+        val activityName: String,
+        val icon: Drawable
+    )
+    private var appEntries: List<AppEntry> = emptyList()
+    private var appsScroll: ScrollView? = null
+    private var appsListContainer: LinearLayout? = null
+    private var appsSpinner: ProgressBar? = null
+    private var appsEmptyLabel: TextView? = null
+    // Map from first-letter character to Y offset in appsListContainer
+    private val appLetterYPositions = mutableMapOf<Char, Int>()
+    private var appsSearchBox: EditText? = null
+    private var themesSearchBox: EditText? = null
 
-    // IMG-2: analog clock canvas view
-    private var analogClockView: AnalogClockView? = null
+    // ── Clock / battery ───────────────────────────────────────────────────────
+    private var digitalClockView : TextView? = null
+    private var analogClockView  : AnalogClockView? = null
+    private var batteryBarView   : BatteryBarView? = null
+    private var batteryPctView   : TextView? = null
+    private var batteryArcView   : BatteryArcView? = null
+    private var lastBatteryPct   = -1
 
-    // IMG-1: battery bar + label
-    private var batteryBarView: BatteryBarView? = null
-    private var batteryPctView: TextView? = null
-
-    // IMG-6: battery arc
-    private var batteryArcView: BatteryArcView? = null
-
-    // Live-clock handler
-    private val clockHandler = Handler(Looper.getMainLooper())
+    private val clockHandler  = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
         override fun run() {
-            tickClock()
-            clockHandler.postDelayed(this, 1_000)
+            tickClock(); clockHandler.postDelayed(this, 1_000)
         }
     }
 
-    // Battery receiver
-    private var lastBatteryPct = -1
     private val batteryReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
+        override fun onReceive(ctx: Context, intent: Intent) {
             val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
             val pct   = if (level >= 0 && scale > 0) level * 100 / scale else 0
@@ -140,15 +162,14 @@ class NappyThemePickerActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        scrollViewId = View.generateViewId()          // FIX-5
-        try {
-            setContentView(buildPickerUi())
-        } catch (e: Throwable) {
-            android.util.Log.e("NappyThemePicker", "UI build failed, showing fallback", e)
+        scrollViewId = View.generateViewId()
+        currentTheme = NappyThemeManager.getSelectedTheme(this)
+        try { setContentView(buildRootUi()) }
+        catch (e: Throwable) {
+            android.util.Log.e("NappyThemePicker", "UI build failed", e)
             setContentView(TextView(this).apply {
                 text = "Nappy Themes unavailable — please try again."
-                textSize = 16f
-                setTextColor(Color.WHITE)
+                textSize = 16f; setTextColor(Color.WHITE)
                 setPadding(dp(20), dp(40), dp(20), dp(20))
             })
         }
@@ -157,11 +178,10 @@ class NappyThemePickerActivity : Activity() {
     override fun onStart() {
         super.onStart()
         clockHandler.post(clockRunnable)
-        try {
-            registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        } catch (e: Exception) {
-            android.util.Log.w("NappyThemePicker", "Battery receiver registration failed", e)
-        }
+        try { registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
+        catch (e: Exception) { android.util.Log.w("NappyThemePicker", "Battery receiver failed", e) }
+        // Kick off app loading only when the tab is first shown
+        if (appEntries.isEmpty()) loadAppsAsync()
     }
 
     override fun onStop() {
@@ -170,706 +190,901 @@ class NappyThemePickerActivity : Activity() {
         try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
     }
 
-    override fun onDestroy() {                        // FIX-2
+    override fun onDestroy() {
         super.onDestroy()
-        themeRadios.clear()
-        themeCards.clear()
-        selectedCard      = null
-        footerLabel       = null
-        scrollView        = null
-        digitalClockView  = null
-        analogClockView   = null
-        batteryBarView    = null
-        batteryPctView    = null
-        batteryArcView    = null
+        themeRadios.clear(); themeCards.clear()
+        selectedCard = null; footerLabel = null
+        themesScroll = null; appsScroll = null
+        appsListContainer = null; appsSpinner = null; appsEmptyLabel = null
+        digitalClockView = null; analogClockView = null
+        batteryBarView = null; batteryPctView = null; batteryArcView = null
+        tabThemes = null; tabApps = null
+        themesPanel = null; appsPanel = null
+        appsSidebar = null; themesSidebar = null
+        appsSearchBox = null; themesSearchBox = null
+        themesSearchBox = null
     }
 
     // ── Clock tick ─────────────────────────────────────────────────────────────
 
     private fun tickClock() {
-        val now = Date()
-        digitalClockView?.text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(now)
+        val t = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        digitalClockView?.text = t
         analogClockView?.invalidate()
     }
 
-    // ── UI construction ────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // ROOT UI
+    // ══════════════════════════════════════════════════════════════════════════
 
-    private fun buildPickerUi(): View {
-        val selected = NappyThemeManager.getSelectedTheme(this)
+    private fun buildRootUi(): View {
+        val (accentColor, _) = previewColors(currentTheme)
 
-        // FrameLayout root so sidebar can float over the scroll list  (IMG-4)
+        // Outer FrameLayout holds everything so sidebars can float
         val frame = FrameLayout(this).apply {
             layoutParams = vgLp(MATCH, MATCH)
             setBackgroundColor(Color.parseColor("#111111"))
         }
 
-        // Main column — right-margin leaves room for the sidebar rail
+        // Main column — right margin for sidebar
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = flLp(MATCH, MATCH).apply { rightMargin = dp(32) }
+            layoutParams = flLp(MATCH, MATCH).apply { rightMargin = dp(30) }
         }
         frame.addView(root)
 
-        // ── IMG-4: Large bold digital clock ───────────────────────────────────
+        // ── Header: clock + battery ───────────────────────────────────────────
+        root.addView(buildHeader())
+
+        // ── IMG-3: Wavy divider ───────────────────────────────────────────────
+        root.addView(WavyDividerView(this).apply {
+            layoutParams = llLp(MATCH, dp(22)).apply {
+                leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(2)
+            }
+        })
+
+        // ── Tab bar ───────────────────────────────────────────────────────────
+        root.addView(buildTabBar(accentColor))
+
+        // ── Shared search box ─────────────────────────────────────────────────
+        val search = buildSearchBox()
+        root.addView(search)
+
+        // ── Content area (switches between Themes and Apps panels) ────────────
+        val content = FrameLayout(this).apply {
+            layoutParams = llLp(MATCH, 0, 1f)
+        }
+
+        themesPanel = buildThemesPanel()
+        appsPanel   = buildAppsPanel()
+        appsPanel!!.visibility = View.GONE
+
+        content.addView(themesPanel, vgLp(MATCH, MATCH))
+        content.addView(appsPanel,   vgLp(MATCH, MATCH))
+        root.addView(content)
+
+        // ── IMG-2: Pill shortcuts ─────────────────────────────────────────────
+        root.addView(buildPillShortcutsRow())
+
+        // ── Footer ────────────────────────────────────────────────────────────
+        footerLabel = TextView(this).apply {
+            text = activeThemeLabel(currentTheme)
+            textSize = 11f; setTextColor(Color.parseColor("#666666"))
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(4), dp(16), dp(14))
+        }
+        root.addView(footerLabel)
+
+        // ── Sidebars (float in frame, switch visibility with tabs) ────────────
+        val allThemes = listOf(NappyTheme.NONE) + NappyTheme.pickerThemes()
+        themesSidebar = buildThemesSidebarRail(allThemes)
+        appsSidebar   = buildAppsSidebarRail()   // populated after apps load
+
+        val sidebarLp = flLp(dp(30), WRAP).apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL; rightMargin = dp(1)
+        }
+        frame.addView(themesSidebar, sidebarLp)
+        frame.addView(appsSidebar,   sidebarLp)
+        appsSidebar!!.visibility = View.GONE
+
+        // Wire search to active tab
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                val q = s?.toString()?.trim()?.lowercase() ?: ""
+                if (activeTab == Tab.THEMES) filterThemes(q)
+                else filterApps(q)
+            }
+        })
+        // Keep reference so we can reset on tab switch
+        themesSearchBox = search
+        appsSearchBox   = search
+
+        return frame
+    }
+
+    // ── Header ────────────────────────────────────────────────────────────────
+
+    private fun buildHeader(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // IMG-4: Large digital clock
         val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         digitalClockView = TextView(this).apply {
-            text = timeStr
-            textSize = 52f
-            setTextColor(Color.WHITE)
+            text = timeStr; textSize = 50f; setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
-            setPadding(dp(20), dp(20), dp(20), 0)
-            contentDescription = "Current time $timeStr"
+            setPadding(dp(20), dp(18), dp(20), 0)
         }
-        root.addView(digitalClockView)
+        col.addView(digitalClockView)
 
-        // ── IMG-1: Italic day-of-week hero label ──────────────────────────────
+        // IMG-1: Italic day name
         val dayName = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date())
-        val dayLabel = TextView(this).apply {
-            text = dayName
-            textSize = 30f
+        col.addView(TextView(this).apply {
+            text = dayName; textSize = 28f
             setTypeface(null, Typeface.BOLD_ITALIC)
-            setTextColor(Color.parseColor("#E91E63"))
+            setTextColor(previewColors(currentTheme).second.let {
+                // Use accent if it's bright enough, else fall back to pink
+                if (it != Color.WHITE && it != Color.BLACK) it
+                else Color.parseColor("#E91E63")
+            })
             setPadding(dp(22), 0, dp(20), dp(2))
-        }
-        root.addView(dayLabel)
+        })
 
-        // ── IMG-1: Horizontal rolling date strip ──────────────────────────────
-        root.addView(buildDateStrip())
+        // IMG-1: Date strip
+        col.addView(buildDateStrip())
 
-        // ── IMG-2 + IMG-1: Analog clock + Battery row ─────────────────────────
-        val clockBattRow = LinearLayout(this).apply {
+        // IMG-2 + IMG-6: Analog clock + battery row
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(4))
+            setPadding(dp(16), dp(6), dp(16), dp(4))
         }
-
-        // IMG-2: Analog clock (Canvas-drawn)
         analogClockView = AnalogClockView(this).apply {
-            layoutParams = llLp(dp(72), dp(72)).apply { rightMargin = dp(16) }
+            layoutParams = llLp(dp(68), dp(68)).apply { rightMargin = dp(14) }
             contentDescription = "Analog clock"
         }
-        clockBattRow.addView(analogClockView)
+        row.addView(analogClockView)
 
-        // Right side: battery arc + % + close
-        val rightCol = LinearLayout(this).apply {
+        val battCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = llLp(0, WRAP, 1f)
         }
-
-        // IMG-6: Battery circle arc
         val battRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         }
         batteryArcView = BatteryArcView(this).apply {
-            layoutParams = llLp(dp(36), dp(36)).apply { rightMargin = dp(8) }
-            contentDescription = "Battery level indicator"
+            layoutParams = llLp(dp(34), dp(34)).apply { rightMargin = dp(8) }
         }
         battRow.addView(batteryArcView)
         batteryPctView = TextView(this).apply {
             text = if (lastBatteryPct >= 0) "$lastBatteryPct%" else "--%"
-            textSize = 13f
-            setTextColor(Color.parseColor("#AAAAAA"))
+            textSize = 13f; setTextColor(Color.parseColor("#AAAAAA"))
         }
         battRow.addView(batteryPctView)
-        rightCol.addView(battRow)
-
-        // IMG-1: Battery progress bar
+        battCol.addView(battRow)
         batteryBarView = BatteryBarView(this).apply {
-            layoutParams = llLp(MATCH, dp(4)).apply { topMargin = dp(6); bottomMargin = dp(4) }
+            layoutParams = llLp(MATCH, dp(4)).apply { topMargin = dp(6) }
         }
-        rightCol.addView(batteryBarView)
-
-        clockBattRow.addView(rightCol)
+        battCol.addView(batteryBarView)
+        row.addView(battCol)
 
         // Close button
-        val closeBtn = TextView(this).apply {
-            text = "✕"
-            textSize = 18f
-            setTextColor(Color.parseColor("#666666"))
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(4), 0, dp(4))
-            contentDescription = "Close theme picker"
+        row.addView(TextView(this).apply {
+            text = "✕"; textSize = 18f; setTextColor(Color.parseColor("#555555"))
+            setPadding(dp(8), dp(4), 0, dp(4)); gravity = Gravity.CENTER
+            contentDescription = "Close"
             setOnClickListener { finish() }
-        }
-        clockBattRow.addView(closeBtn)
-        root.addView(clockBattRow)
-
-        // ── IMG-3: Sine-wave divider ───────────────────────────────────────────
-        root.addView(WavyDividerView(this).apply {
-            layoutParams = llLp(MATCH, dp(24)).apply {
-                leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(4)
-            }
         })
+        col.addView(row)
+        return col
+    }
 
-        // ── Search bar (revision 1) ────────────────────────────────────────────
-        val searchBox = EditText(this).apply {
-            hint = "Search themes…"
-            setHintTextColor(Color.parseColor("#555555"))
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1A1A1A"))
-                cornerRadius = dp(10).toFloat()
-                setStroke(dp(1), Color.parseColor("#2C2C2C"))
-            }
-            layoutParams = llLp(MATCH, WRAP).apply {
-                leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(6)
-            }
+    // ── Tab bar ───────────────────────────────────────────────────────────────
+
+    private fun buildTabBar(accentColor: Int): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(6), dp(16), dp(0))
         }
-        root.addView(searchBox)
 
-        // ── Scrollable theme list ─────────────────────────────────────────────
+        fun tab(label: String, targetTab: Tab): TextView = TextView(this).apply {
+            text = label; textSize = 14f; gravity = Gravity.CENTER
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dp(20), dp(10), dp(20), dp(10))
+            layoutParams = llLp(0, WRAP, 1f)
+            contentDescription = "$label tab"
+            setOnClickListener { switchTab(targetTab) }
+        }
+
+        tabThemes = tab("Themes", Tab.THEMES)
+        tabApps   = tab("Apps",   Tab.APPS)
+        bar.addView(tabThemes)
+        bar.addView(tabApps)
+
+        updateTabAppearance(accentColor)
+        return bar
+    }
+
+    private fun updateTabAppearance(accentColor: Int = previewColors(currentTheme).second) {
+        val active   = accentColor.takeIf { it != Color.WHITE && it != Color.BLACK }
+                       ?: Color.parseColor("#00E5FF")
+        val inactive = Color.parseColor("#444444")
+
+        tabThemes?.setTextColor(if (activeTab == Tab.THEMES) active else inactive)
+        tabApps  ?.setTextColor(if (activeTab == Tab.APPS)   active else inactive)
+
+        tabThemes?.background = if (activeTab == Tab.THEMES) tabUnderline(active) else null
+        tabApps  ?.background = if (activeTab == Tab.APPS)   tabUnderline(active) else null
+    }
+
+    private fun tabUnderline(color: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(Color.TRANSPARENT)
+        // Draw bottom border via a layer — simplest approach is just tinting text; 
+        // we express it as a 2dp bottom stroke using shape padding trick
+        setStroke(0, Color.TRANSPARENT)
+    }.also {
+        // Real underline via a thin bottom bar added as padding/separator is tricky
+        // without XML; we just rely on bold colour change as the indicator.
+    }
+
+    private fun switchTab(tab: Tab) {
+        if (activeTab == tab) return
+        activeTab = tab
+        themesPanel?.visibility = if (tab == Tab.THEMES) View.VISIBLE else View.GONE
+        appsPanel  ?.visibility = if (tab == Tab.APPS)   View.VISIBLE else View.GONE
+        themesSidebar?.visibility = if (tab == Tab.THEMES) View.VISIBLE else View.GONE
+        appsSidebar  ?.visibility = if (tab == Tab.APPS)   View.VISIBLE else View.GONE
+        // Reset search
+        themesSearchBox?.setText("")
+        updateTabAppearance()
+        // If apps haven't loaded yet, try again
+        if (tab == Tab.APPS && appEntries.isEmpty()) loadAppsAsync()
+    }
+
+    // ── Search box (shared) ───────────────────────────────────────────────────
+
+    private fun buildSearchBox(): EditText = EditText(this).apply {
+        hint = "Search…"
+        setHintTextColor(Color.parseColor("#555555"))
+        setTextColor(Color.WHITE); textSize = 14f
+        setPadding(dp(14), dp(8), dp(14), dp(8))
+        background = GradientDrawable().apply {
+            setColor(Color.parseColor("#1A1A1A"))
+            cornerRadius = dp(10).toFloat()
+            setStroke(dp(1), Color.parseColor("#2C2C2C"))
+        }
+        layoutParams = llLp(MATCH, WRAP).apply {
+            leftMargin = dp(12); rightMargin = dp(12)
+            topMargin = dp(6); bottomMargin = dp(4)
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // THEMES PANEL (existing feature set)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private fun buildThemesPanel(): View {
         val sv = ScrollView(this).apply {
-            id = scrollViewId                         // FIX-5
-            layoutParams = llLp(MATCH, 0, 1f)
+            id = scrollViewId  // FIX-5
+            layoutParams = vgLp(MATCH, MATCH)
         }
-        scrollView = sv
+        themesScroll = sv
 
         val radioGroup = RadioGroup(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), 0, dp(12), dp(12))
         }
-
         var cumY = 0
-        addThemeOption(radioGroup, NappyTheme.NONE, selected, cumY)
-        cumY += dp(78)
+        addThemeOption(radioGroup, NappyTheme.NONE, currentTheme, cumY); cumY += dp(78)
         for (theme in NappyTheme.pickerThemes()) {
-            addThemeOption(radioGroup, theme, selected, cumY)
-            cumY += dp(78)
+            addThemeOption(radioGroup, theme, currentTheme, cumY); cumY += dp(78)
         }
-
         sv.addView(radioGroup)
-        root.addView(sv)
-
-        // ── IMG-2: Pill shortcut buttons at bottom ─────────────────────────────
-        root.addView(buildPillShortcutsRow())
-
-        // ── Footer (revision 1) ────────────────────────────────────────────────
-        footerLabel = TextView(this).apply {
-            text = activeThemeLabel(selected)
-            textSize = 11f
-            setTextColor(Color.parseColor("#666666"))
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(6), dp(16), dp(16))
-        }
-        root.addView(footerLabel)
-
-        // ── IMG-4: Theme-initial sidebar rail ─────────────────────────────────
-        val allThemes = listOf(NappyTheme.NONE) + NappyTheme.pickerThemes()
-        val sidebar = buildSidebarRail(allThemes, selected)
-        frame.addView(sidebar, flLp(dp(30), WRAP).apply {
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            rightMargin = dp(2)
-        })
-
-        // Wire search filter
-        searchBox.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) {
-                val q = s?.toString()?.trim()?.lowercase() ?: ""
-                for ((theme, card) in themeCards) {
-                    val hit = q.isEmpty()
-                        || theme.displayName.lowercase().contains(q)
-                        || theme.description.lowercase().contains(q)
-                    card.visibility = if (hit) View.VISIBLE else View.GONE
-                }
-            }
-        })
-
-        return frame
+        return sv
     }
 
-    // ── IMG-1: Horizontal date strip ──────────────────────────────────────────
-
-    private fun buildDateStrip(): View {
-        val today = Calendar.getInstance()
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(20), dp(4), dp(20), dp(4))
-        }
-        val dayNumFmt = SimpleDateFormat("d", Locale.getDefault())
-        for (offset in 0..5) {
-            val cal = today.clone() as Calendar
-            cal.add(Calendar.DAY_OF_YEAR, offset)
-            val num = dayNumFmt.format(cal.time)
-            val cell = TextView(this).apply {
-                text = num
-                textSize = if (offset == 0) 18f else 13f
-                setTextColor(if (offset == 0) Color.WHITE else Color.parseColor("#555555"))
-                setTypeface(null, if (offset == 0) Typeface.BOLD else Typeface.NORMAL)
-                layoutParams = llLp(0, WRAP, 1f)
-                gravity = Gravity.CENTER
-            }
-            row.addView(cell)
-        }
-        return row
-    }
-
-    // ── IMG-2: Pill shortcut row ───────────────────────────────────────────────
-
-    private fun buildPillShortcutsRow(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(8), dp(16), dp(4))
-        }
-
-        fun pill(label: String, icon: String, onClick: () -> Unit) =
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                setPadding(dp(16), dp(8), dp(16), dp(8))
-                background = GradientDrawable().apply {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(1), Color.parseColor("#333333"))
-                    cornerRadius = dp(20).toFloat()
-                }
-                layoutParams = llLp(0, WRAP, 1f).apply {
-                    leftMargin = dp(4); rightMargin = dp(4)
-                }
-                contentDescription = "$label shortcut"
-                setOnClickListener { onClick() }
-            }.also { pill ->
-                pill.addView(TextView(this).apply {
-                    text = icon
-                    textSize = 14f
-                    setPadding(0, 0, dp(6), 0)
-                })
-                pill.addView(TextView(this).apply {
-                    text = label.uppercase()
-                    textSize = 11f
-                    setTextColor(Color.parseColor("#888888"))
-                    letterSpacing = 0.12f
-                })
-            }
-
-        row.addView(pill("Search", "🔍") {
-            // Scroll to top of list so the search box is visible
-            scrollView?.smoothScrollTo(0, 0)
-        })
-        row.addView(pill("Camera", "📷") {
-            try {
-                val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
-                startActivity(intent)
-            } catch (e: Exception) {
-                Toast.makeText(this, "No camera app found", Toast.LENGTH_SHORT).show()
-            }
-        })
-        return row
-    }
-
-    // ── IMG-4: Sidebar rail ────────────────────────────────────────────────────
-
-    private fun buildSidebarRail(themes: List<NappyTheme>, selected: NappyTheme): LinearLayout =
+    private fun buildThemesSidebarRail(themes: List<NappyTheme>): LinearLayout =
         LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(Color.parseColor("#181818"))
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+            setBackgroundColor(Color.parseColor("#161616"))
             themes.forEach { theme ->
                 addView(TextView(this@NappyThemePickerActivity).apply {
-                    text = theme.displayName.take(1).uppercase()
-                    textSize = 10f
-                    gravity = Gravity.CENTER
-                    setTextColor(
-                        if (theme == selected) Color.parseColor("#00E5FF")
-                        else Color.parseColor("#555555")
-                    )
-                    layoutParams = llLp(dp(30), dp(30))
-                    contentDescription = "Jump to ${theme.displayName} theme"
+                    text  = theme.displayName.take(1).uppercase()
+                    textSize = 9f; gravity = Gravity.CENTER
+                    setTextColor(if (theme == currentTheme) previewColors(currentTheme).second
+                                 else Color.parseColor("#444444"))
+                    layoutParams = llLp(dp(30), dp(28))
+                    contentDescription = "Jump to ${theme.displayName}"
                     setOnClickListener {
-                        scrollView?.smoothScrollTo(0, themeYPositions[theme] ?: 0)
+                        themesScroll?.smoothScrollTo(0, themeYPositions[theme] ?: 0)
                     }
                 })
             }
         }
 
-    // ── Theme card ────────────────────────────────────────────────────────────
+    private fun filterThemes(q: String) {
+        for ((theme, card) in themeCards) {
+            val hit = q.isEmpty()
+                || theme.displayName.lowercase().contains(q)
+                || theme.description.lowercase().contains(q)
+            card.visibility = if (hit) View.VISIBLE else View.GONE
+        }
+    }
 
-    private fun addThemeOption(
-        group: RadioGroup,
-        theme: NappyTheme,
-        selected: NappyTheme,
-        cumulativeY: Int
-    ) {
+    private fun addThemeOption(group: RadioGroup, theme: NappyTheme,
+                               selected: NappyTheme, cumY: Int) {
         val isSelected = theme == selected
-        themeYPositions[theme] = cumulativeY
+        themeYPositions[theme] = cumY
 
-        // Card is a vertical LinearLayout so we can append the torn edge below
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = llLp(MATCH, WRAP).apply {  // FIX-6
-                topMargin = dp(5); bottomMargin = dp(5)
-            }
+            layoutParams = llLp(MATCH, WRAP).apply { topMargin = dp(5); bottomMargin = dp(5) }
             setPadding(dp(12), dp(12), dp(12), dp(12))
             background = cardBackground(isSelected)
-            contentDescription = "${theme.displayName} theme. ${theme.description}"
+            contentDescription = "${theme.displayName}. ${theme.description}"
         }
         if (isSelected) selectedCard = card
 
-        // Row: swatch | text | radio
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             layoutParams = llLp(MATCH, WRAP)
         }
-
-        // IMG-5/6: Split diagonal swatch
-        val swatch = SplitSwatchView(this, previewColors(theme)).apply {
-            layoutParams = llLp(dp(60), dp(50)).apply { rightMargin = dp(12) }
-            contentDescription = "${theme.displayName} colour preview"           // FIX-4
-        }
-        row.addView(swatch)
-
-        // Text column
+        row.addView(SplitSwatchView(this, previewColors(theme)).apply {
+            layoutParams = llLp(dp(58), dp(48)).apply { rightMargin = dp(12) }
+            contentDescription = "${theme.displayName} colour preview"
+        })
         val textCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = llLp(0, WRAP, 1f)
+            orientation = LinearLayout.VERTICAL; layoutParams = llLp(0, WRAP, 1f)
         }
         textCol.addView(TextView(this).apply {
-            text = theme.displayName
-            textSize = 17f
-            setTextColor(Color.WHITE)
-            setTypeface(null, Typeface.BOLD)
+            text = theme.displayName; textSize = 17f
+            setTextColor(Color.WHITE); setTypeface(null, Typeface.BOLD)
         })
         textCol.addView(TextView(this).apply {
-            text = theme.description
-            textSize = 12f
+            text = theme.description; textSize = 12f
             setTextColor(Color.parseColor("#888888"))
         })
-        if (isSelected) {
-            textCol.addView(TextView(this).apply {
-                text = "● Active"
-                textSize = 11f
-                setTextColor(Color.parseColor("#00E5FF"))
-                setTypeface(null, Typeface.BOLD)
-                setPadding(0, dp(2), 0, 0)
-            })
-        }
+        if (isSelected) textCol.addView(TextView(this).apply {
+            text = "● Active"; textSize = 11f
+            setTextColor(Color.parseColor("#00E5FF"))
+            setTypeface(null, Typeface.BOLD); setPadding(0, dp(2), 0, 0)
+        })
         row.addView(textCol)
 
-        // FIX-1: generateViewId() avoids ordinal-0 ID collision
         val radio = RadioButton(this).apply {
-            id = View.generateViewId()
-            isChecked = isSelected
-            isClickable = false
-            contentDescription = if (isSelected) "Selected" else "Not selected" // FIX-4
+            id = View.generateViewId()          // FIX-1
+            isChecked = isSelected; isClickable = false
+            contentDescription = if (isSelected) "Selected" else "Not selected"
         }
         row.addView(radio)
         themeRadios.add(theme to radio)
-
         card.addView(row)
-
-        // IMG-5: Torn edge below active card
-        if (isSelected) {
-            card.addView(tornEdge(previewColors(theme).first))
-        }
+        if (isSelected) card.addView(tornEdge(previewColors(theme).first))
 
         themeCards.add(theme to card)
 
-        // ── Click: select theme ───────────────────────────────────────────────
         card.setOnClickListener {
-            // Bounce animation (revision 1)
             card.animate().scaleX(0.96f).scaleY(0.96f).setDuration(70)
-                .withEndAction {
-                    card.animate().scaleX(1f).scaleY(1f).setDuration(110).start()
-                }.start()
+                .withEndAction { card.animate().scaleX(1f).scaleY(1f).setDuration(110).start() }
+                .start()
 
-            // Remove torn edge from old selection
             selectedCard?.let { prev ->
-                if (prev is LinearLayout && prev.childCount > 1)
-                    prev.removeViewAt(prev.childCount - 1)
+                if (prev is LinearLayout && prev.childCount > 1) prev.removeViewAt(prev.childCount - 1)
                 prev.background = cardBackground(false)
             }
             card.background = cardBackground(true)
-            card.addView(tornEdge(previewColors(theme).first))   // IMG-5
+            card.addView(tornEdge(previewColors(theme).first))
             selectedCard = card
 
-            // FIX-4: update all radio accessibility states
             for ((_, r) in themeRadios) { r.isChecked = false; r.contentDescription = "Not selected" }
-            radio.isChecked = true
-            radio.contentDescription = "Selected"
+            radio.isChecked = true; radio.contentDescription = "Selected"
 
             try {
                 NappyThemeManager.setSelectedTheme(this, theme)
+                currentTheme = theme
                 footerLabel?.text = activeThemeLabel(theme)
             } catch (e: Throwable) {
                 android.util.Log.e("NappyThemePicker", "Failed to save theme", e)
                 Toast.makeText(this, "Could not save theme.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-
-            // Flash the full-screen preview then kill launcher
             showPreviewOverlay(theme, applyOnTap = true)
         }
+        card.setOnLongClickListener { showPreviewOverlay(theme, applyOnTap = false); true }
 
-        // ── Long-press: preview without applying ──────────────────────────────
-        card.setOnLongClickListener {
-            showPreviewOverlay(theme, applyOnTap = false)
-            true
-        }
-
-        group.addView(card)   // FIX-6: LayoutParams already set on card
+        group.addView(card)
     }
 
-    // ── IMG-6: Full-screen gradient overlay ────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // APPS PANEL — full scrollable app list replacing the app drawer
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private fun buildAppsPanel(): View {
+        val frame = FrameLayout(this).apply { layoutParams = vgLp(MATCH, MATCH) }
+
+        // Scrollable container
+        val sv = ScrollView(this).apply { layoutParams = vgLp(MATCH, MATCH) }
+        appsScroll = sv
+
+        appsListContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(80))
+        }
+        sv.addView(appsListContainer)
+        frame.addView(sv)
+
+        // Loading spinner (centred, shown while apps load)
+        appsSpinner = ProgressBar(this).apply {
+            layoutParams = flLp(dp(48), dp(48), Gravity.CENTER)
+        }
+        frame.addView(appsSpinner)
+
+        // Empty / error label
+        appsEmptyLabel = TextView(this).apply {
+            text = "No apps found"; textSize = 14f
+            setTextColor(Color.parseColor("#555555")); gravity = Gravity.CENTER
+            layoutParams = flLp(MATCH, WRAP, Gravity.CENTER)
+            visibility = View.GONE
+        }
+        frame.addView(appsEmptyLabel)
+
+        return frame
+    }
+
+    // ── Load apps off the main thread ─────────────────────────────────────────
+
+    private fun loadAppsAsync() {
+        appsSpinner?.visibility  = View.VISIBLE
+        appsEmptyLabel?.visibility = View.GONE
+        appsListContainer?.removeAllViews()
+        appLetterYPositions.clear()
+
+        Thread {
+            val pm = packageManager
+            val intent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            val resolved: List<ResolveInfo> = try {
+                pm.queryIntentActivities(intent, 0)
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            // Build lightweight entries, sorted A-Z
+            val entries = resolved.mapNotNull { ri ->
+                try {
+                    AppEntry(
+                        label        = ri.loadLabel(pm).toString(),
+                        packageName  = ri.activityInfo.packageName,
+                        activityName = ri.activityInfo.name,
+                        icon         = ri.loadIcon(pm)
+                    )
+                } catch (e: Exception) { null }
+            }.sortedBy { it.label.lowercase() }
+
+            Handler(Looper.getMainLooper()).post {
+                appEntries = entries
+                populateAppsList(entries)
+            }
+        }.start()
+    }
+
+    private fun populateAppsList(entries: List<AppEntry>) {
+        appsSpinner?.visibility = View.GONE
+        appsListContainer?.removeAllViews()
+        appLetterYPositions.clear()
+
+        if (entries.isEmpty()) {
+            appsEmptyLabel?.visibility = View.VISIBLE
+            return
+        }
+
+        val (accentColor, _) = previewColors(currentTheme)
+        val iconSize  = dp(44)
+        val rowHeight = dp(58)
+        var cumY = 0
+
+        var currentLetter = ' '
+        for (entry in entries) {
+            val firstChar = entry.label.firstOrNull()?.uppercaseChar() ?: '#'
+
+            // Letter header when the first character changes
+            if (firstChar != currentLetter) {
+                currentLetter = firstChar
+                appLetterYPositions[currentLetter] = cumY
+
+                val header = TextView(this).apply {
+                    text = firstChar.toString(); textSize = 12f
+                    setTextColor(accentColor); setTypeface(null, Typeface.BOLD)
+                    setPadding(dp(4), dp(8), 0, dp(4))
+                    layoutParams = llLp(MATCH, WRAP)
+                }
+                appsListContainer?.addView(header)
+                cumY += dp(32)
+            }
+
+            // App row
+            val row = buildAppRow(entry, iconSize, accentColor)
+            row.layoutParams = llLp(MATCH, rowHeight).apply {
+                bottomMargin = dp(2)
+            }
+            appsListContainer?.addView(row)
+            cumY += rowHeight + dp(2)
+        }
+
+        // Rebuild the A-Z sidebar now that we know which letters exist
+        rebuildAppsSidebar()
+    }
+
+    private fun buildAppRow(entry: AppEntry, iconSize: Int, accentColor: Int): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#191919"))
+                cornerRadius = dp(10).toFloat()
+            }
+            contentDescription = "Launch ${entry.label}"
+
+            // Icon
+            addView(ImageView(this@NappyThemePickerActivity).apply {
+                setImageDrawable(entry.icon)
+                layoutParams = llLp(iconSize, iconSize).apply { rightMargin = dp(14) }
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            })
+
+            // Label
+            addView(TextView(this@NappyThemePickerActivity).apply {
+                text = entry.label; textSize = 15f
+                setTextColor(Color.WHITE)
+                layoutParams = llLp(0, WRAP, 1f)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+
+            // Accent dot
+            addView(View(this@NappyThemePickerActivity).apply {
+                layoutParams = llLp(dp(6), dp(6)).apply { leftMargin = dp(8) }
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(accentColor); alpha = 80
+                }
+            })
+
+            // Tap to launch
+            setOnClickListener { launchApp(entry) }
+
+            // Long press to show package name toast
+            setOnLongClickListener {
+                Toast.makeText(this@NappyThemePickerActivity,
+                    entry.packageName, Toast.LENGTH_SHORT).show()
+                true
+            }
+        }
+
+    private fun launchApp(entry: AppEntry) {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(entry.packageName)
+                ?: Intent().apply {
+                    setClassName(entry.packageName, entry.activityName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            android.util.Log.e("NappyThemePicker", "Could not launch ${entry.packageName}", e)
+            Toast.makeText(this, "Could not open ${entry.label}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ── Apps sidebar (A-Z for installed apps) ─────────────────────────────────
+
+    private fun buildAppsSidebarRail(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+        setBackgroundColor(Color.parseColor("#161616"))
+        // Populated lazily after apps load via rebuildAppsSidebar()
+    }
+
+    private fun rebuildAppsSidebar() {
+        val sidebar = appsSidebar ?: return
+        sidebar.removeAllViews()
+        val accentColor = previewColors(currentTheme).second
+            .takeIf { it != Color.WHITE && it != Color.BLACK }
+            ?: Color.parseColor("#00E5FF")
+
+        for ((letter, _) in appLetterYPositions.entries.sortedBy { it.key }) {
+            sidebar.addView(TextView(this).apply {
+                text = letter.toString(); textSize = 9f; gravity = Gravity.CENTER
+                setTextColor(accentColor)
+                layoutParams = llLp(dp(30), dp(22))
+                contentDescription = "Jump to $letter"
+                setOnClickListener {
+                    appsScroll?.smoothScrollTo(0, appLetterYPositions[letter] ?: 0)
+                }
+            })
+        }
+    }
+
+    private fun filterApps(q: String) {
+        val container = appsListContainer ?: return
+        if (q.isEmpty()) {
+            for (i in 0 until container.childCount) container.getChildAt(i).visibility = View.VISIBLE
+            return
+        }
+        for (i in 0 until container.childCount) {
+            val child = container.getChildAt(i)
+            val visible = when (child) {
+                is LinearLayout -> {
+                    // App row — check label text
+                    val label = (child.getChildAt(1) as? TextView)?.text?.toString() ?: ""
+                    label.lowercase().contains(q)
+                }
+                is TextView -> {
+                    // Letter header — always show so structure stays
+                    true
+                }
+                else -> true
+            }
+            child.visibility = if (visible) View.VISIBLE else View.GONE
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // IMG-1: Date strip + IMG-2: Pill shortcuts
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private fun buildDateStrip(): View {
+        val today = Calendar.getInstance()
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(20), dp(2), dp(20), dp(2))
+        }
+        val fmt = SimpleDateFormat("d", Locale.getDefault())
+        for (offset in 0..5) {
+            val cal = today.clone() as Calendar
+            cal.add(Calendar.DAY_OF_YEAR, offset)
+            row.addView(TextView(this).apply {
+                text = fmt.format(cal.time)
+                textSize = if (offset == 0) 17f else 12f
+                setTextColor(if (offset == 0) Color.WHITE else Color.parseColor("#444444"))
+                setTypeface(null, if (offset == 0) Typeface.BOLD else Typeface.NORMAL)
+                layoutParams = llLp(0, WRAP, 1f); gravity = Gravity.CENTER
+            })
+        }
+        return row
+    }
+
+    private fun buildPillShortcutsRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+            setPadding(dp(16), dp(6), dp(16), dp(2))
+        }
+        fun pill(icon: String, label: String, onClick: () -> Unit) =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+                setPadding(dp(14), dp(7), dp(14), dp(7))
+                background = GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), Color.parseColor("#2C2C2C"))
+                    cornerRadius = dp(18).toFloat()
+                }
+                layoutParams = llLp(0, WRAP, 1f).apply {
+                    leftMargin = dp(4); rightMargin = dp(4)
+                }
+                contentDescription = "$label shortcut"
+                setOnClickListener { onClick() }
+                addView(TextView(this@NappyThemePickerActivity).apply {
+                    text = icon; textSize = 13f; setPadding(0, 0, dp(5), 0)
+                })
+                addView(TextView(this@NappyThemePickerActivity).apply {
+                    text = label.uppercase(); textSize = 10f
+                    setTextColor(Color.parseColor("#777777")); letterSpacing = 0.1f
+                })
+            }
+
+        row.addView(pill("🔍", "Search") { themesScroll?.smoothScrollTo(0, 0) })
+        row.addView(pill("📷", "Camera") {
+            try { startActivity(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)) }
+            catch (e: Exception) { Toast.makeText(this, "No camera app found", Toast.LENGTH_SHORT).show() }
+        })
+        return row
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // IMG-6: Full-screen overlay
+    // ══════════════════════════════════════════════════════════════════════════
 
     private fun showPreviewOverlay(theme: NappyTheme, applyOnTap: Boolean) {
         val (c1, c2) = previewColors(theme)
         val decor = window.decorView as FrameLayout
-
         val overlay = FrameLayout(this).apply {
             layoutParams = vgLp(MATCH, MATCH)
             background = GradientDrawable().apply {
-                colors = intArrayOf(c1, c2)
-                orientation = GradientDrawable.Orientation.TL_BR
+                colors = intArrayOf(c1, c2); orientation = GradientDrawable.Orientation.TL_BR
             }
             alpha = 0f
         }
-
-        // Large theme name
         overlay.addView(TextView(this).apply {
-            text = theme.displayName
-            textSize = 42f
-            setTextColor(Color.WHITE)
-            setTypeface(null, Typeface.BOLD_ITALIC)
-            gravity = Gravity.CENTER
-            setShadowLayer(12f, 0f, 4f, Color.parseColor("#88000000"))
+            text = theme.displayName; textSize = 40f
+            setTextColor(Color.WHITE); setTypeface(null, Typeface.BOLD_ITALIC)
+            gravity = Gravity.CENTER; setShadowLayer(12f, 0f, 4f, Color.parseColor("#88000000"))
             layoutParams = flLp(MATCH, WRAP, Gravity.CENTER)
         })
-        // Hint
         overlay.addView(TextView(this).apply {
-            text = if (applyOnTap) "Applying theme — tap to continue" else "Long-press preview — tap to dismiss"
-            textSize = 12f
-            setTextColor(Color.parseColor("#CCFFFFFF"))
-            gravity = Gravity.CENTER
+            text = if (applyOnTap) "Applying — tap to continue" else "Preview — tap to dismiss"
+            textSize = 12f; setTextColor(Color.parseColor("#CCFFFFFF")); gravity = Gravity.CENTER
             layoutParams = flLp(MATCH, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
                 bottomMargin = dp(80)
             }
         })
-
         decor.addView(overlay)
         overlay.animate().alpha(1f).setDuration(180).start()
-
         overlay.setOnClickListener {
             overlay.animate().alpha(0f).setDuration(140)
-                .withEndAction { decor.removeView(overlay) }
-                .start()
+                .withEndAction { decor.removeView(overlay) }.start()
             if (applyOnTap) {
-                try {
-                    com.android.launcher3.Utilities.killLauncher()
-                } catch (e: Throwable) {
-                    android.util.Log.e("NappyThemePicker", "killLauncher failed, finishing", e)
-                    // FIX-3: inform user theme was saved before finishing
-                    Toast.makeText(
-                        this,
+                try { com.android.launcher3.Utilities.killLauncher() }
+                catch (e: Throwable) {                              // FIX-3
+                    android.util.Log.e("NappyThemePicker", "killLauncher failed", e)
+                    Toast.makeText(this,
                         "${theme.displayName} saved. Relaunch your home screen to apply.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                        Toast.LENGTH_LONG).show()
                     finish()
                 }
             }
         }
     }
 
-    // ── Inner Canvas view classes ─────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // Canvas View inner classes
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * IMG-2: Analog clock face drawn with Canvas; call invalidate() to redraw.
-     */
     inner class AnalogClockView(context: Context) : View(context) {
-        private val bgPaint  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A1A1A") }
-        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#333333"); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat()
+        private val bgP  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A1A1A") }
+        private val rimP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#2E2E2E"); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat()
         }
-        private val hrPaint  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#CCCCCC"); strokeWidth = dp(3).toFloat(); strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
+        private val hrP  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#CCCCCC"); strokeWidth = dp(3).toFloat()
+            strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
         }
-        private val minPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#AAAAAA"); strokeWidth = dp(2).toFloat(); strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
+        private val minP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#AAAAAA"); strokeWidth = dp(2).toFloat()
+            strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
         }
-        private val secPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#E91E63"); strokeWidth = dp(1).toFloat(); strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
+        private val secP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = previewColors(currentTheme).second
+                .takeIf { it != Color.WHITE && it != Color.BLACK }
+                ?: Color.parseColor("#E91E63")
+            strokeWidth = dp(1).toFloat(); strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
         }
-        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        private val dotP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
 
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f; val cy = height / 2f; val r = min(cx, cy) - dp(3)
-            // Face
-            canvas.drawCircle(cx, cy, r, bgPaint)
-            canvas.drawCircle(cx, cy, r, rimPaint)
-
+            canvas.drawCircle(cx, cy, r, bgP); canvas.drawCircle(cx, cy, r, rimP)
             val cal = Calendar.getInstance()
-            val hr  = cal.get(Calendar.HOUR).toFloat()
-            val min = cal.get(Calendar.MINUTE).toFloat()
-            val sec = cal.get(Calendar.SECOND).toFloat()
-
-            fun hand(angleDeg: Float, lengthFraction: Float, paint: Paint) {
-                val rad = Math.toRadians(angleDeg.toDouble() - 90)
-                val len = r * lengthFraction
-                canvas.drawLine(cx, cy,
-                    cx + (cos(rad) * len).toFloat(),
-                    cy + (sin(rad) * len).toFloat(), paint)
+            val hr = cal.get(Calendar.HOUR).toFloat()
+            val mn = cal.get(Calendar.MINUTE).toFloat()
+            val sc = cal.get(Calendar.SECOND).toFloat()
+            fun hand(deg: Float, frac: Float, p: Paint) {
+                val rad = Math.toRadians((deg - 90).toDouble())
+                val len = r * frac
+                canvas.drawLine(cx, cy, cx + cos(rad).toFloat() * len, cy + sin(rad).toFloat() * len, p)
             }
-            hand((hr / 12f + min / 720f) * 360f, 0.50f, hrPaint)
-            hand((min / 60f + sec / 3600f) * 360f, 0.72f, minPaint)
-            hand(sec / 60f * 360f, 0.80f, secPaint)
-            canvas.drawCircle(cx, cy, dp(3).toFloat(), dotPaint)
+            hand((hr / 12f + mn / 720f) * 360f, 0.50f, hrP)
+            hand((mn / 60f + sc / 3600f) * 360f, 0.72f, minP)
+            hand(sc / 60f * 360f,               0.82f, secP)
+            canvas.drawCircle(cx, cy, dp(3).toFloat(), dotP)
         }
     }
 
-    /**
-     * IMG-3: Sine-wave divider drawn on Canvas.
-     */
     inner class WavyDividerView(context: Context) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#2E2E2E"); strokeWidth = dp(2).toFloat(); style = Paint.Style.STROKE
+            color = Color.parseColor("#282828"); strokeWidth = dp(2).toFloat(); style = Paint.Style.STROKE
         }
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat(); val cy = height / 2f
-            val amp = dp(5).toFloat(); val wl = dp(36).toFloat()
-            val path = Path(); path.moveTo(0f, cy)
-            var x = 0f
-            while (x <= w) {
-                val y = cy + amp * sin((x / wl) * 2 * Math.PI).toFloat()
-                path.lineTo(x, y); x += dp(2).toFloat()
-            }
+            val amp = dp(4).toFloat(); val wl = dp(34).toFloat()
+            val path = Path(); var x = 0f; path.moveTo(0f, cy)
+            while (x <= w) { path.lineTo(x, cy + amp * sin((x / wl * 2 * Math.PI)).toFloat()); x += dp(2).toFloat() }
             canvas.drawPath(path, paint)
         }
     }
 
-    /**
-     * IMG-1: Thin horizontal battery progress bar.
-     */
     inner class BatteryBarView(context: Context) : View(context) {
         private var pct = 0
-        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2A2A2A") }
-        private val fillPaint  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#E91E63") }
-
+        private val trackP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#222222") }
+        private val fillP  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = previewColors(currentTheme).second.takeIf { it != Color.WHITE } ?: Color.parseColor("#E91E63")
+        }
         fun setPct(p: Int) { pct = p.coerceIn(0, 100); invalidate() }
-
         override fun onDraw(canvas: Canvas) {
             val r = height / 2f
-            canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), r, r, trackPaint)
-            val fillW = width * pct / 100f
-            if (fillW > 0f)
-                canvas.drawRoundRect(RectF(0f, 0f, fillW, height.toFloat()), r, r, fillPaint)
+            canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), r, r, trackP)
+            if (pct > 0) canvas.drawRoundRect(RectF(0f, 0f, width * pct / 100f, height.toFloat()), r, r, fillP)
         }
     }
 
-    /**
-     * IMG-6: Battery arc (circle arc showing %).
-     */
     inner class BatteryArcView(context: Context) : View(context) {
         private var pct = 0
-        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#2A2A2A"); style = Paint.Style.STROKE; strokeWidth = dp(3).toFloat()
+        private val trackP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#222222"); style = Paint.Style.STROKE; strokeWidth = dp(3).toFloat()
         }
-        private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#00E5FF"); style = Paint.Style.STROKE
-            strokeWidth = dp(3).toFloat(); strokeCap = Paint.Cap.ROUND
+        private val arcP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = previewColors(currentTheme).second.takeIf { it != Color.WHITE && it != Color.BLACK }
+                ?: Color.parseColor("#00E5FF")
+            style = Paint.Style.STROKE; strokeWidth = dp(3).toFloat(); strokeCap = Paint.Cap.ROUND
         }
-
         fun setPct(p: Int) { pct = p.coerceIn(0, 100); invalidate() }
-
         override fun onDraw(canvas: Canvas) {
             val pad = dp(3).toFloat()
             val rect = RectF(pad, pad, width - pad, height - pad)
-            canvas.drawArc(rect, -90f, 360f, false, trackPaint)
-            canvas.drawArc(rect, -90f, 360f * pct / 100f, false, arcPaint)
+            canvas.drawArc(rect, -90f, 360f, false, trackP)
+            canvas.drawArc(rect, -90f, 360f * pct / 100f, false, arcP)
         }
     }
 
-    /**
-     * IMG-5/6: Split diagonal swatch — left triangle = start colour, right = end colour.
-     */
-    inner class SplitSwatchView(
-        context: Context,
-        private val colors: Pair<Int, Int>
-    ) : View(context) {
+    inner class SplitSwatchView(context: Context, private val colors: Pair<Int, Int>) : View(context) {
         private val paintL = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colors.first }
         private val paintR = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colors.second }
-        private val cornerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#111111"); style = Paint.Style.STROKE; strokeWidth = dp(1).toFloat()
-        }
-        private val clip = GradientDrawable().apply { cornerRadius = dp(8).toFloat() }
-
+        init { background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(colors.first) } }
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat(); val h = height.toFloat()
-            // Left triangle
-            val lp = Path().apply { moveTo(0f,0f); lineTo(w*0.62f,0f); lineTo(w*0.38f,h); lineTo(0f,h); close() }
-            canvas.drawPath(lp, paintL)
-            // Right triangle
-            val rp = Path().apply { moveTo(w*0.62f,0f); lineTo(w,0f); lineTo(w,h); lineTo(w*0.38f,h); close() }
-            canvas.drawPath(rp, paintR)
+            canvas.drawPath(Path().apply { moveTo(0f,0f); lineTo(w*0.62f,0f); lineTo(w*0.38f,h); lineTo(0f,h); close() }, paintL)
+            canvas.drawPath(Path().apply { moveTo(w*0.62f,0f); lineTo(w,0f); lineTo(w,h); lineTo(w*0.38f,h); close() }, paintR)
         }
-
-        init { background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(colors.first) } }
     }
 
     // ── IMG-5: Torn edge helper ────────────────────────────────────────────────
 
-    private fun tornEdge(accentColor: Int): View {
-        return object : View(this) {
-            private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = accentColor; alpha = 140; style = Paint.Style.FILL
-            }
-            init { layoutParams = llLp(MATCH, dp(10)).apply { topMargin = dp(8) } }
-            override fun onDraw(canvas: Canvas) {
-                val w = width.toFloat()
-                val rng = Random(accentColor.toLong() and 0xFFFFFFL)
-                val path = Path()
-                path.moveTo(0f, height.toFloat())
-                path.lineTo(0f, height * 0.5f)
-                var x = 0f
-                val step = dp(14).toFloat()
-                while (x <= w) {
-                    path.lineTo(x, height * (0.15f + rng.nextFloat() * 0.7f))
-                    x += step
-                }
-                path.lineTo(w, height.toFloat())
-                path.close()
-                canvas.drawPath(path, paint)
-            }
+    private fun tornEdge(accentColor: Int): View = object : View(this) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = accentColor; alpha = 130; style = Paint.Style.FILL
+        }
+        init { layoutParams = llLp(MATCH, dp(10)).apply { topMargin = dp(8) } }
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val rng = Random(accentColor.toLong() and 0xFFFFFFL)
+            val path = Path(); path.moveTo(0f, height.toFloat()); path.lineTo(0f, height * 0.5f)
+            var x = 0f
+            while (x <= w) { path.lineTo(x, height * (0.1f + rng.nextFloat() * 0.8f)); x += dp(14).toFloat() }
+            path.lineTo(w, height.toFloat()); path.close()
+            canvas.drawPath(path, paint)
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // Helpers
+    // ══════════════════════════════════════════════════════════════════════════
 
-    private fun cardBackground(selected: Boolean): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(Color.parseColor(if (selected) "#1C2C2C" else "#1E1E1E"))
-            cornerRadius = dp(12).toFloat()
-            if (selected) setStroke(dp(2), Color.parseColor("#00E5FF"))
-        }
+    private fun cardBackground(selected: Boolean): GradientDrawable = GradientDrawable().apply {
+        setColor(Color.parseColor(if (selected) "#1C2C2C" else "#1E1E1E"))
+        cornerRadius = dp(12).toFloat()
+        if (selected) setStroke(dp(2), previewColors(currentTheme).second
+            .takeIf { it != Color.WHITE && it != Color.BLACK } ?: Color.parseColor("#00E5FF"))
+    }
 
     private fun activeThemeLabel(theme: NappyTheme) =
         if (theme == NappyTheme.NONE) "Current theme: Default"
         else "Current theme: ${theme.displayName}"
 
-    private fun previewColors(theme: NappyTheme): Pair<Int, Int> =
-        when (theme) {
-            NappyTheme.NONE         -> Color.parseColor("#333333") to Color.parseColor("#111111")
-            NappyTheme.LEATHER_DARK -> Color.parseColor("#1A1512") to Color.parseColor("#E91E63")
-            NappyTheme.INK_SPLASH   -> Color.parseColor("#111111") to Color.parseColor("#DDDDDD")
-            NappyTheme.TEAL_WAVE    -> Color.parseColor("#00E5FF") to Color.parseColor("#00B8A9")
-            NappyTheme.TORN_PAPER   -> Color.parseColor("#1A2332") to Color.parseColor("#E65100")
-            NappyTheme.RAVEN_RED    -> Color.parseColor("#1A0000") to Color.parseColor("#E53935")
-            NappyTheme.SPLIT_MOON   -> Color.parseColor("#3A3A3A") to Color.parseColor("#B71C1C")
-        }
-
-    // ── LayoutParams shorthand ────────────────────────────────────────────────
+    private fun previewColors(theme: NappyTheme): Pair<Int, Int> = when (theme) {
+        NappyTheme.NONE         -> Color.parseColor("#333333") to Color.parseColor("#111111")
+        NappyTheme.LEATHER_DARK -> Color.parseColor("#1A1512") to Color.parseColor("#E91E63")
+        NappyTheme.INK_SPLASH   -> Color.parseColor("#111111") to Color.parseColor("#DDDDDD")
+        NappyTheme.TEAL_WAVE    -> Color.parseColor("#00E5FF") to Color.parseColor("#00B8A9")
+        NappyTheme.TORN_PAPER   -> Color.parseColor("#1A2332") to Color.parseColor("#E65100")
+        NappyTheme.RAVEN_RED    -> Color.parseColor("#1A0000") to Color.parseColor("#E53935")
+        NappyTheme.SPLIT_MOON   -> Color.parseColor("#3A3A3A") to Color.parseColor("#B71C1C")
+    }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
     private fun vgLp(w: Int, h: Int) = ViewGroup.LayoutParams(w, h)
-    private fun flLp(w: Int, h: Int, gravity: Int = Gravity.NO_GRAVITY) =
-        FrameLayout.LayoutParams(w, h, gravity)
-    private fun llLp(w: Int, h: Int, weight: Float = 0f) =
-        LinearLayout.LayoutParams(w, h, weight)
-
-    private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
-    private val WRAP  = ViewGroup.LayoutParams.WRAP_CONTENT
+    private fun flLp(w: Int, h: Int, gravity: Int = Gravity.NO_GRAVITY) = FrameLayout.LayoutParams(w, h, gravity)
+    private fun llLp(w: Int, h: Int, weight: Float = 0f) = LinearLayout.LayoutParams(w, h, weight)
 }
