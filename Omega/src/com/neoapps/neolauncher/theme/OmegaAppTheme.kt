@@ -35,6 +35,8 @@ import com.materialkolor.dynamicColorScheme
 import com.neoapps.neolauncher.preferences.THEME_BLACK
 import com.neoapps.neolauncher.preferences.THEME_DARK
 import com.neoapps.neolauncher.preferences.THEME_LIGHT
+import com.neoapps.neolauncher.preferences.THEME_SYSTEM
+import com.neoapps.neolauncher.preferences.THEME_SYSTEM_BLACK
 import com.neoapps.neolauncher.preferences.THEME_WALLPAPER
 import com.neoapps.neolauncher.preferences.THEME_WALLPAPER_BLACK
 import com.neoapps.neolauncher.util.prefs
@@ -84,6 +86,14 @@ fun isDarkTheme(): Boolean {
         THEME_WALLPAPER,
         THEME_WALLPAPER_BLACK,
              -> wallpaperSupportsDarkTheme()
+
+        // FIX: THEME_SYSTEM and THEME_SYSTEM_BLACK were missing, causing them to
+        // fall through to isAutoThemeDark() — which is correct, but they were also
+        // not imported so THEME_SYSTEM_BLACK wasn't handled at all. Now both are
+        // explicit so the intent is clear and future changes won't miss them.
+        THEME_SYSTEM,
+        THEME_SYSTEM_BLACK,
+             -> isAutoThemeDark()
 
         else -> isAutoThemeDark()
     }
