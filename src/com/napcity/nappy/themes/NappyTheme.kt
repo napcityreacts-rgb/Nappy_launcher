@@ -22,42 +22,57 @@ package com.napcity.nappy.themes
 enum class NappyTheme(
     val key: String,
     val displayName: String,
-    val description: String
+    val description: String,
+    /** Default accent hex for this theme (used by the customiser). */
+    val accentHex: String,
+    /** Whether the customiser shows the accent colour picker for this theme. */
+    val supportsCustomAccent: Boolean = true,
+    /** Whether the customiser allows overriding the clock font. */
+    val supportsFontOverride: Boolean = true
 ) {
     NONE(
         "none",
         "Default (Neo-Launcher)",
-        "Standard Neo-Launcher home screen with workspace, widgets and hotseat."
+        "Standard Neo-Launcher home screen with workspace, widgets and hotseat.",
+        "#7B61FF",
+        supportsCustomAccent = false,
+        supportsFontOverride = false
     ),
     LEATHER_DARK(
         "leather_dark",
         "Leather Dark",
-        "Black leather texture, pink cursive day name, climate line, month strip, battery, outline-icon app list."
+        "Black leather texture, pink cursive day name, climate line, month strip, battery, outline-icon app list.",
+        "#E91E63"
     ),
     INK_SPLASH(
         "ink_splash",
         "Ink Splash",
-        "Black/white ink-splash wallpaper, large clock, vertical app list with white icons, A-Z scrollbar."
+        "Black/white ink-splash wallpaper, large clock, vertical app list with white icons, A-Z scrollbar.",
+        "#FFFFFF"
     ),
     TEAL_WAVE(
         "teal_wave",
         "Teal Wave",
-        "Cyan wavy split, bold date block, location line, diagonal app row, weather text."
+        "Cyan wavy split, bold date block, location line, diagonal app row, weather text.",
+        "#00E5FF"
     ),
     TORN_PAPER(
         "torn_paper",
         "Torn Paper",
-        "Orange torn-paper split, big clock, weather, orange-gradient icon app list."
+        "Orange torn-paper split, big clock, weather, orange-gradient icon app list.",
+        "#E65100"
     ),
     RAVEN_RED(
         "raven_red",
         "Raven Red",
-        "Dark red raven artwork, cursive day, date strip, music player bar, 4 app tiles."
+        "Dark red raven artwork, cursive day, date strip, music player bar, 4 app tiles.",
+        "#E53935"
     ),
     SPLIT_MOON(
         "split_moon",
         "Split Moon",
-        "Grey/red vertical split, huge clock, moon over mountains, vertical icon rail."
+        "Grey/red vertical split, huge clock, moon over mountains, vertical icon rail.",
+        "#B71C1C"
     );
 
     companion object {
