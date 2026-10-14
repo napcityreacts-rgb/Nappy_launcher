@@ -266,6 +266,9 @@ import com.android.systemui.plugins.LauncherOverlayPlugin;
 import com.android.systemui.plugins.PluginListener;
 import com.android.systemui.plugins.shared.LauncherOverlayManager;
 import com.android.systemui.plugins.shared.LauncherOverlayManager.LauncherOverlayTouchProxy;
+import com.napcity.nappy.themes.NappyThemeFactory;
+import com.napcity.nappy.themes.NappyThemeManager;
+import com.napcity.nappy.themes.NappyThemeView;
 import com.neoapps.neolauncher.NeoLauncher;
 
 import java.io.FileDescriptor;
@@ -336,6 +339,64 @@ public class Launcher extends StatefulActivity<LauncherState>
 
     @Thunk
     DragLayer mDragLayer;
+
+    // Nappy Themes: the active custom home-screen theme overlay (null if default)
+    private NappyThemeView mNappyThemeView;
+
+    /**
+     * Shows the selected Nappy home-screen theme as an overlay on top of the
+     * workspace. The theme replaces the home-screen layout visually; the app
+     * drawer, gestures, widgets and all other Launcher functionality remain
+     * intact underneath. A long-press on the theme opens the theme picker.
+     */
+    private void maybeShowNappyTheme() {
+        if (!NappyThemeManager.INSTANCE.isThemed(this)) {
+            return;
+        }
+        NappyThemeView themeView = NappyThemeFactory.INSTANCE.createView(
+                this, NappyThemeManager.INSTANCE.getSelectedTheme(this));
+        if (themeView == null) {
+            return;
+        }
+        mNappyThemeView = themeView;
+        // Wire drawer + settings callbacks
+        themeView.setOnOpenAppDrawer(() -> {
+            // Show the app drawer (all apps)
+            getStateManager().goToState(LauncherState.ALL_APPS);
+            return kotlin.Unit.INSTANCE;
+        });
+        themeView.setOnOpenSettings(() -> {
+            // Open the Omega/Neo Compose settings (PreferenceActivity),
+            // NOT the AOSP SettingsActivity — Dom sees the Compose screen.
+            startActivity(new android.content.Intent(this,
+                    com.neoapps.neolauncher.preferences.PreferenceActivity.class));
+            return kotlin.Unit.INSTANCE;
+        });
+        // Long-press to open theme picker
+        themeView.setOnLongClickListener(v -> {
+            startActivity(new android.content.Intent(this,
+                    com.napcity.nappy.themes.NappyThemePickerActivity.class));
+            return true;
+        });
+        // Add as an overlay on top of the drag layer
+        android.view.ViewGroup.LayoutParams lp =
+                new android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+        getDragLayer().addView(themeView, lp);
+        themeView.onThemeStart();
+    }
+
+    /**
+     * Removes the Nappy theme overlay (e.g. when the user picks Default).
+     */
+    public void hideNappyTheme() {
+        if (mNappyThemeView != null) {
+            mNappyThemeView.onThemeStop();
+            getDragLayer().removeView(mNappyThemeView);
+            mNappyThemeView = null;
+        }
+    }
 
     private WidgetManagerHelper mAppWidgetManager;
     private LauncherWidgetHolder mAppWidgetHolder;
@@ -516,6 +577,9 @@ public class Launcher extends StatefulActivity<LauncherState>
         setDefaultKeyMode(DEFAULT_KEYS_SEARCH_LOCAL);
 
         setContentView(getRootView());
+
+        // Nappy Themes: overlay the selected custom home-screen theme
+        maybeShowNappyTheme();
 
         if (mOnInitialBindListener != null) {
             getRootView().getViewTreeObserver().addOnPreDrawListener(mOnInitialBindListener);
