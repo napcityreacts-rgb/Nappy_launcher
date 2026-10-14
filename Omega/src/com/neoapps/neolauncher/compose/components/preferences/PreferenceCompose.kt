@@ -611,14 +611,26 @@ fun PagePreference(
                         context,
                         com.napcity.nappy.themes.NappyThemePickerActivity::class.java
                     )
-                    // ALWAYS set NEW_TASK: LocalContext.current may be a
-                    // ContextWrapper rather than the Activity itself, and the
-                    // old `context !is Activity` check missed that case —
-                    // startActivity then threw and the catch swallowed it,
-                    // so tapping Nappy Themes did nothing at all.
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                } catch (e: Exception) {
+                    // Unwrap ContextWrapper to find the hosting Activity.
+                    // Launch WITHOUT NEW_TASK when we have an Activity so
+                    // the picker stays on top of Settings in the same task.
+                    // FLAG_ACTIVITY_NEW_TASK pushed the picker into a
+                    // separate task, which the system then closed —
+                    // showing as "black screen then closes".
+                    // Only use NEW_TASK as a last resort (no Activity).
+                    var ctx: android.content.Context? = context
+                    var hostActivity: android.app.Activity? = null
+                    while (ctx != null) {
+                        if (ctx is android.app.Activity) { hostActivity = ctx; break }
+                        ctx = if (ctx is android.content.ContextWrapper) ctx.baseContext else null
+                    }
+                    if (hostActivity != null) {
+                        hostActivity.startActivity(intent)
+                    } else {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                    }
+                } catch (e: Throwable) {
                     android.util.Log.e("PagePreference", "Failed to launch NappyThemePickerActivity", e)
                     Toast.makeText(context, "Nappy Themes failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
