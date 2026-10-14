@@ -82,7 +82,11 @@ class ThemeOverride(private val themeSet: ThemeSet, val listener: ThemeOverrideL
 
     class ActivityListener(activity: AppCompatActivity) : ThemeOverrideListener {
         private val activityRef = WeakReference(activity)
-        override val isAlive = activityRef.get() != null
+
+        // FIX: was a val computed once at construction time — always returned true even after
+        // the Activity was destroyed and GC'd. Changed to a get() so it reflects the
+        // WeakReference's live state on every call, letting removeDeadListeners() work correctly.
+        override val isAlive get() = activityRef.get() != null
 
         override fun applyTheme(themeRes: Int) {
             activityRef.get()?.setTheme(themeRes)
@@ -95,7 +99,9 @@ class ThemeOverride(private val themeSet: ThemeSet, val listener: ThemeOverrideL
 
     class ContextListener(context: Context) : ThemeOverrideListener {
         private val contextRef = WeakReference(context)
-        override val isAlive = contextRef.get() != null
+
+        // FIX: same issue — was a val, always true even after context is gone.
+        override val isAlive get() = contextRef.get() != null
 
         override fun applyTheme(themeRes: Int) {
             contextRef.get()?.setTheme(themeRes)
