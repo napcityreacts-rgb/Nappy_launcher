@@ -81,8 +81,21 @@ constructor(
                 PathShapeDelegate(currentAppShape)
             }
 
+        // FIX: was `oldState.iconMask == folderShapeKey`, but IconState.iconMask always stores
+        // the *app* shape key (set to appShapeKey below). Comparing it to folderShapeKey meant
+        // the folder shape was never reused from cache — a new PathShapeDelegate was allocated
+        // on every verifyIconState() call even when nothing changed.
+        // The base ThemeManager tracks folder reuse via folderRadius; here we mirror that by
+        // comparing the folder shape's own hash against the cached folderMask we now track via
+        // a local variable derived from the same source. Since IconState has no separate
+        // folderMask field, we store the folder hash in the unused `key` field that
+        // CustomThemeManager controls, and split it out on re-entry.
+        //
+        // Simpler fix: compare the folder shape hash against the previously stored folder hash
+        // retrieved from the custom key field (formatted as "appHash|folderHash").
+        val oldFolderShapeKey = oldState?.key?.substringAfter("|", "")
         val folderShape =
-            if (oldState != null && oldState.iconMask == folderShapeKey) {
+            if (oldState != null && oldFolderShapeKey == folderShapeKey) {
                 oldState.folderShape
             } else {
                 PathShapeDelegate(currentFolderShape)
@@ -99,7 +112,8 @@ constructor(
             }
 
         return IconState(
-            key = currentAppShape.toString(),
+            // Store both shape keys so we can recover folderShapeKey on the next call
+            key = "$appShapeKey|$folderShapeKey",
             iconMask = appShapeKey,
             folderRadius = 1f,
             themeController = iconControllerFactory,
