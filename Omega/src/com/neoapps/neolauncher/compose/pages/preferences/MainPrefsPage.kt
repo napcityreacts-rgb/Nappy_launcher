@@ -45,6 +45,7 @@ import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -96,6 +97,7 @@ fun MainPrefsPage() {
     val motionScheme = MaterialTheme.motionScheme
 
     val uiPrefs = persistentListOf(
+        PageItem.PrefsNappyThemes,
         PageItem.PrefsProfile,
         PageItem.PrefsDrawer,
         PageItem.PrefsDesktop,
@@ -274,6 +276,20 @@ fun MainPrefsPage() {
                         is NavRoute.Backup -> BackupMainPage()
 
                         is NavRoute.Dev -> DevPrefsPage()
+
+                        is NavRoute.NappyThemes -> {
+                            // Nappy Themes is a standalone Activity, not a Compose
+                            // page. Launch the picker and pop back to the list.
+                            LaunchedEffect(Unit) {
+                                context.startActivity(
+                                    Intent(
+                                        context,
+                                        com.napcity.nappy.themes.NappyThemePickerActivity::class.java
+                                    )
+                                )
+                                paneNavigator.navigateBack(BackNavigationBehavior.PopLatest)
+                            }
+                        }
 
                         is NavRoute.About.License -> LicenseScreen()
                         is NavRoute.About.Translators -> TranslatorsScreen()
