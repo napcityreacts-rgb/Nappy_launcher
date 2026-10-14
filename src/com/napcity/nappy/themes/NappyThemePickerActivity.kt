@@ -45,6 +45,23 @@ class NappyThemePickerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Never crash on open: if anything in the UI build throws
+        // (bad prefs, missing resources, OEM quirks), show a minimal
+        // fallback instead of dying instantly on tap.
+        try {
+            setContentView(buildPickerUi())
+        } catch (e: Exception) {
+            android.util.Log.e("NappyThemePicker", "Picker UI build failed, showing fallback", e)
+            setContentView(TextView(this).apply {
+                text = "Nappy Themes unavailable — please try again."
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                setPadding(dp(20), dp(40), dp(20), dp(20))
+            })
+        }
+    }
+
+    private fun buildPickerUi(): android.view.View {
         val selected = NappyThemeManager.getSelectedTheme(this)
 
         val root = LinearLayout(this).apply {
@@ -111,7 +128,7 @@ class NappyThemePickerActivity : Activity() {
         }
         root.addView(footer)
 
-        setContentView(root)
+        return root
     }
 
     private fun addThemeOption(
@@ -188,11 +205,20 @@ class NappyThemePickerActivity : Activity() {
             // Update visual state manually (RadioGroup isn't managing these)
             for ((_, r) in themeRadios) r.isChecked = false
             radio.isChecked = true
-            NappyThemeManager.setSelectedTheme(this, theme)
+            try {
+                NappyThemeManager.setSelectedTheme(this, theme)
+            } catch (e: Exception) {
+                android.util.Log.e("NappyThemePicker", "Failed to save theme", e)
+            }
             // Restart the launcher immediately so the theme applies.
             // killLauncher() kills this process; the system restarts the
             // home app automatically with the new theme overlaid.
-            com.android.launcher3.Utilities.killLauncher()
+            try {
+                com.android.launcher3.Utilities.killLauncher()
+            } catch (e: Exception) {
+                android.util.Log.e("NappyThemePicker", "killLauncher failed, finishing instead", e)
+                finish()
+            }
         }
 
         group.addView(card)
