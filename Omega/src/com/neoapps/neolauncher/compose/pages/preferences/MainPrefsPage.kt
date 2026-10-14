@@ -278,16 +278,25 @@ fun MainPrefsPage() {
                         is NavRoute.Dev -> DevPrefsPage()
 
                         is NavRoute.NappyThemes -> {
-                            // Nappy Themes is a standalone Activity, not a Compose
-                            // page. Launch the picker and pop back to the list.
+                            // Defensive fallback: PagePreference now launches the
+                            // picker directly from the tap, so navigation should
+                            // never reach here. If it does (e.g. deep link),
+                            // launch the picker and render nothing — do NOT call
+                            // navigateBack(): popping the stack immediately
+                            // after navigation raced and crashed instantly.
                             LaunchedEffect(Unit) {
-                                context.startActivity(
-                                    Intent(
+                                try {
+                                    val intent = Intent(
                                         context,
                                         com.napcity.nappy.themes.NappyThemePickerActivity::class.java
                                     )
-                                )
-                                paneNavigator.navigateBack(BackNavigationBehavior.PopLatest)
+                                    if (context !is android.app.Activity) {
+                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainPrefsPage", "Failed to launch NappyThemePickerActivity", e)
+                                }
                             }
                         }
 
