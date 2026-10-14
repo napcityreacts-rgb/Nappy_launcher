@@ -290,12 +290,12 @@ fun MainPrefsPage() {
                                         context,
                                         com.napcity.nappy.themes.NappyThemePickerActivity::class.java
                                     )
-                                    if (context !is android.app.Activity) {
-                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
+                                    // ALWAYS set NEW_TASK (see PagePreference).
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     context.startActivity(intent)
                                 } catch (e: Exception) {
                                     android.util.Log.e("MainPrefsPage", "Failed to launch NappyThemePickerActivity", e)
+                                    android.widget.Toast.makeText(context, "Nappy Themes failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
