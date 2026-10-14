@@ -50,7 +50,11 @@ class NappyThemePickerActivity : Activity() {
         // fallback instead of dying instantly on tap.
         try {
             setContentView(buildPickerUi())
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Catch Throwable (not just Exception): an Error (e.g.
+            // NoClassDefFoundError, LinkageError) during UI build would
+            // otherwise kill the activity with no fallback — showing as
+            // "black screen then closes" with no crash dialog.
             android.util.Log.e("NappyThemePicker", "Picker UI build failed, showing fallback", e)
             setContentView(TextView(this).apply {
                 text = "Nappy Themes unavailable — please try again."
@@ -207,7 +211,7 @@ class NappyThemePickerActivity : Activity() {
             radio.isChecked = true
             try {
                 NappyThemeManager.setSelectedTheme(this, theme)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 android.util.Log.e("NappyThemePicker", "Failed to save theme", e)
             }
             // Restart the launcher immediately so the theme applies.
@@ -215,7 +219,7 @@ class NappyThemePickerActivity : Activity() {
             // home app automatically with the new theme overlaid.
             try {
                 com.android.launcher3.Utilities.killLauncher()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 android.util.Log.e("NappyThemePicker", "killLauncher failed, finishing instead", e)
                 finish()
             }
