@@ -278,11 +278,26 @@ fun MainPrefsPage() {
                         is NavRoute.Dev -> DevPrefsPage()
 
                         is NavRoute.NappyThemes -> {
-                            // Picker is launched directly from the row tap in
-                            // PagePreference — this branch must NOT launch it
-                            // again. A second launch (with NEW_TASK) raced the
-                            // first and closed the picker ("black screen then
-                            // closes"). Render nothing.
+                            // Defensive fallback: PagePreference now launches the
+                            // picker directly from the tap, so navigation should
+                            // never reach here. If it does (e.g. deep link),
+                            // launch the picker and render nothing — do NOT call
+                            // navigateBack(): popping the stack immediately
+                            // after navigation raced and crashed instantly.
+                            LaunchedEffect(Unit) {
+                                try {
+                                    val intent = Intent(
+                                        context,
+                                        com.napcity.nappy.themes.NappyThemePickerActivity::class.java
+                                    )
+                                    if (context !is android.app.Activity) {
+                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainPrefsPage", "Failed to launch NappyThemePickerActivity", e)
+                                }
+                            }
                         }
 
                         is NavRoute.About.License -> LicenseScreen()
