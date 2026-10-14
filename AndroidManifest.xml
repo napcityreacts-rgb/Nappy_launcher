@@ -74,15 +74,18 @@
         <activity
             android:name="com.napcity.nappy.themes.NappyThemePickerActivity"
             android:exported="false"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|fontScale|uiMode" />
         <activity
             android:name="com.napcity.nappy.settings.NappyAdvancedSettingsActivity"
             android:exported="false"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|fontScale|uiMode" />
         <activity
             android:name="com.napcity.nappy.settings.NappyThemeCustomiserActivity"
             android:exported="false"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|fontScale|uiMode" />
 
     </application>
 </manifest>
