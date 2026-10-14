@@ -94,6 +94,9 @@ open class NavRoute : Parcelable {
     }
 
     @Serializable
+    open class NappyThemes : NavRoute()
+
+    @Serializable
     open class About : NavRoute() {
         @Serializable
         class License : About()
