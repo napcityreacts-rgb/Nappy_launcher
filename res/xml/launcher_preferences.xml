@@ -50,4 +50,11 @@
         launcher:logIdOn="615"
         launcher:logIdOff="616" />
 
+    <!-- Nappy Themes: opens the theme picker -->
+    <Preference
+        android:key="pref_nappy_themes"
+        android:title="Nappy Themes"
+        android:summary="Pick a custom home-screen theme"
+        android:persistent="false" />
+
 </androidx.preference.PreferenceScreen>
