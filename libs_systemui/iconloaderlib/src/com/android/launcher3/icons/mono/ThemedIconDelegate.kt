@@ -86,18 +86,23 @@ class ThemedIconDelegate(
     companion object {
         const val TAG: String = "ThemedIconDrawable"
 
-        /** Get an int array representing background and foreground colors for themed icons */
-
+        /** Get an int array representing background and foreground colors for themed icons.
+         *
+         * Returns: [0] = background color (accent), [1] = foreground/icon tint color.
+         *
+         * FIX: previously returned 3 elements — [0] accent, [1] themed_icon_color,
+         * [2] themed_icon_adaptive_background_color — but MonoIconThemeController uses only
+         * [0] and [1] as (bg, fg). The third element was dead and created confusion about
+         * which index is which. Removed the unused third element so the contract matches usage.
+         */
         const val FULLY_OPAQUE = 1
 
         @JvmStatic
         fun getColors(context: Context): IntArray {
             val res = context.resources
             return intArrayOf(
-                //res.getColor(R.color.themed_icon_background_color),
-                IconPreferences(context).accentColor(),
-                res.getColor(R.color.themed_icon_color),
-                res.getColor(R.color.themed_icon_adaptive_background_color),
+                IconPreferences(context).accentColor(),          // [0] background
+                res.getColor(R.color.themed_icon_color),         // [1] foreground / icon tint
             )
         }
     }
