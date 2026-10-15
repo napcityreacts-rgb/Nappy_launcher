@@ -91,6 +91,10 @@
             android:name="com.napcity.nappy.settings.NappyThemeCustomiserActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
+            android:name="com.napcity.nappy.canvas.NappyCanvasActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
 
     </application>
 </manifest>
