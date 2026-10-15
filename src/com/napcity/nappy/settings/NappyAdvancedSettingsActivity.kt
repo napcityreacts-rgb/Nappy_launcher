@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.*
+import com.napcity.nappy.canvas.NappyCanvasActivity
 import com.napcity.nappy.themes.NappyThemeManager
 import com.napcity.nappy.themes.NappyThemePickerActivity
 
@@ -60,6 +61,7 @@ class NappyAdvancedSettingsActivity : Activity() {
 
         // Sections
         root.addView(buildThemeSection())
+        root.addView(buildCanvasSection())
         root.addView(buildHomeSection())
         root.addView(buildGesturesSection())
         root.addView(buildDrawerSection())
@@ -154,6 +156,16 @@ class NappyAdvancedSettingsActivity : Activity() {
             })
         },
         rowSwitch("Apply theme to recent-apps screen", false) { _ -> /* TODO */ },
+    )
+
+    // ── Freeform Canvas (Total-style) ───────────────────────────────────────
+
+    private fun buildCanvasSection() = section(
+        "Freeform Canvas",
+        rowButton("Open Freeform Canvas") {
+            startActivity(Intent(this, NappyCanvasActivity::class.java))
+        },
+        rowInfo("How it works", "Drag objects freely • Long-press any object to edit"),
     )
 
     // ── Home Screen Grid ──────────────────────────────────────────────────────
